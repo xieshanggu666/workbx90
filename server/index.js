@@ -15,6 +15,10 @@ import {
   cropLike, listTrials, startTrial, careTrial, cancelTrial, settleBreeding
 } from './breeding.js'
 import {
+  CATEGORIES as CLAIM_CATEGORIES, claimableEvents, listClaims,
+  submitClaim, reviewClaim, supplementClaim
+} from './claims.js'
+import {
   createUser, publicUser, authContext, authUser, requirePerm,
   contextFromQuery, listUserFarms, claimIfNeeded
 } from './auth.js'
@@ -283,6 +287,10 @@ app.get('/api/state', authContext, (req, res) => {
       linked: f.kind === 'canal' ? net.canalIds.has(f.id) : !!f.active
     })),
     irrigationCosts: IRR_COSTS,
+    // 灾损申报：申报列表（待复核优先）+ 可申报的灾害事件 + 类别图鉴
+    claims: listClaims(fid),
+    claimEvents: claimableEvents(fid),
+    claimCategories: CLAIM_CATEGORIES,
     // 供水网络概览（多座蓄水池连通时统一分水）+ 最近一次每日分配结果（缺水时展示明细）
     irrigationNetworks: nets.filter((n) => n.reservoirs.length).map((n) => ({
       id: n.id, reservoirs: n.reservoirs.length, canals: n.canalIds.length,
@@ -531,6 +539,36 @@ app.post('/api/production/collect', ...mutate('collectJob', 'production/collect'
   const fid = req.ctx.farmId
   const p = q1('SELECT abs_day FROM player WHERE farm_id=?', fid)
   return collectJobs(p.abs_day, fid, req.body?.id != null ? Number(req.body.id) : null)
+}))
+
+// ===== 灾害损失申报与协作复核 =====
+// 提交申报（成员+）：同一成员 × 同一灾害 × 同一类别仅允许一条活跃申报（驳回后可重报）
+app.post('/api/claims/submit', ...mutate('claimSubmit', 'claims/submit', (req) => {
+  const fid = req.ctx.farmId
+  const p = q1('SELECT abs_day FROM player WHERE farm_id=?', fid)
+  return submitClaim({
+    farmId: fid, userId: req.ctx.user.id, userName: req.ctx.user.name,
+    eventId: Number(req.body?.eventId), category: String(req.body?.category || ''),
+    detail: req.body?.detail, qty: req.body?.qty,
+    gold: req.body?.gold, mat: req.body?.mat, currentAbs: p.abs_day
+  })
+}))
+
+// 协作复核（管理员+，不能复核自己的申报）：approve 联动发放金币+物资 / reject 驳回 / need_evidence 要求补证
+app.post('/api/claims/review', ...mutate('claimReview', 'claims/review', (req) => {
+  return reviewClaim({
+    farmId: req.ctx.farmId, userId: req.ctx.user.id, userName: req.ctx.user.name,
+    id: Number(req.body?.id), action: String(req.body?.action || ''),
+    gold: req.body?.gold, mat: req.body?.mat, note: req.body?.note
+  })
+}))
+
+// 补证（仅申报人本人，且申报处于「待补证」）：提交材料后回到待复核队列
+app.post('/api/claims/supplement', ...mutate('claimSubmit', 'claims/supplement', (req) => {
+  return supplementClaim({
+    farmId: req.ctx.farmId, userId: req.ctx.user.id,
+    id: Number(req.body?.id), evidence: req.body?.evidence
+  })
 }))
 
 // ===== 灌溉系统 =====

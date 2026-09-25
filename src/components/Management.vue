@@ -4,8 +4,12 @@
       {{ t.label }}
       <span v-if="t.key==='process' && collectableJobs.length" class="badge">{{ collectableJobs.length }}</span>
       <span v-if="t.key==='breed' && runningTrials" class="badge breed-badge">{{ runningTrials }}</span>
+      <span v-if="t.key==='claims' && claimBadge" class="badge claim-badge">{{ claimBadge }}</span>
     </button>
   </div>
+
+  <!-- 灾损申报与协作复核 -->
+  <ClaimsPanel v-if="tab==='claims'" />
 
   <!-- 育种棚 -->
   <BreedingPanel v-if="tab==='breed'" />
@@ -214,6 +218,7 @@
 import { ref, computed } from 'vue'
 import { useGameStore } from '@/store/game'
 import BreedingPanel from '@/components/BreedingPanel.vue'
+import ClaimsPanel from '@/components/ClaimsPanel.vue'
 const store = useGameStore()
 const tab = ref('market')
 const healthColor = '#4caf50'
@@ -222,10 +227,17 @@ const tabs = [
   { key: 'market', label: '🏪 市场' },
   { key: 'process', label: '⚙️ 加工坊' },
   { key: 'breed', label: '🧬 育种' },
+  { key: 'claims', label: '🌪️ 灾损' },
   { key: 'barn', label: '🐖 畜棚' },
   { key: 'bag', label: '🎒 背包' },
   { key: 'build', label: '🏠 建筑' }
 ]
+
+// 灾损页角标：管理员看待复核数，成员看自己待补证数
+const claimBadge = computed(() => {
+  if (store.canManage) return store.claims.filter((c) => c.status === 'pending').length
+  return store.claims.filter((c) => c.status === 'need_evidence' && c.created_by === store.user?.id).length
+})
 
 // 库存作物 → 展示信息（兼容杂交品种 crop-v<id>）
 function cropOfItem(itemId) {
@@ -355,6 +367,7 @@ function stateLabel(j) {
 .tabs button.active { background:linear-gradient(135deg,#1d3f8f,#2962ff);color:#fff;border-color:transparent; }
 .badge{position:absolute;top:-6px;right:-6px;background:#e53935;color:#fff;font-size:10px;min-width:16px;height:16px;line-height:16px;border-radius:8px;padding:0 4px;font-weight:700;}
 .badge.breed-badge{background:#8e24aa;}
+.badge.claim-badge{background:#ef6c00;}
 .tag.gen{color:#ce93d8;background:#2a1b3d;}
 .tag.mixed{color:#ce93d8;}
 .page { display:grid;grid-template-columns:1fr 1fr;gap:16px; }
