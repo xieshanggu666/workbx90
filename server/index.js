@@ -15,6 +15,10 @@ import {
   cropLike, listTrials, startTrial, careTrial, cancelTrial, settleBreeding
 } from './breeding.js'
 import {
+  CLAIM_CATS, CLAIM_STATUS, MAX_CLAIM_GOLD, MAX_CLAIM_MAT,
+  claimableEvents, listClaims, submitClaim, addEvidence, reviewClaim
+} from './claims.js'
+import {
   createUser, publicUser, authContext, authUser, requirePerm,
   contextFromQuery, listUserFarms, claimIfNeeded
 } from './auth.js'
@@ -288,7 +292,11 @@ app.get('/api/state', authContext, (req, res) => {
       id: n.id, reservoirs: n.reservoirs.length, canals: n.canalIds.length,
       plots: n.plotIds.size, water: n.water, cap: n.cap
     })),
-    irrigationReport: lastReport(fid)
+    irrigationReport: lastReport(fid),
+    // 灾害损失申报：可申报的灾害事件 + 全农场申报单（协作复核）
+    claimEvents: claimableEvents(fid),
+    claims: listClaims(fid),
+    claimMeta: { cats: CLAIM_CATS, status: CLAIM_STATUS, maxGold: MAX_CLAIM_GOLD, maxMat: MAX_CLAIM_MAT }
   })
 })
 
@@ -420,6 +428,47 @@ app.post('/api/buymat', ...mutate('buymat', 'buymat', (req) => {
   if (p.gold < cost) throw Object.assign(new Error('no gold'), { status: 400 })
   run('UPDATE player SET gold=gold-? WHERE farm_id=?', cost, fid)
   addInv(fid, 'disaster-kit', '防灾物资', 'material', n)
+}))
+
+// ===== 灾害损失申报与协作复核 =====
+// 提交申报（成员+）：eventId + category + 申请赔付金币/物资 + 损失说明；
+// 同一成员对同一事件的同类损失仅允许一条进行中的申报（数据库部分唯一索引兜底）
+app.post('/api/claims/submit', ...mutate('claimSubmit', 'claims/submit', (req) => {
+  return submitClaim({
+    farmId: req.ctx.farmId,
+    userId: req.ctx.user.id,
+    userName: req.ctx.user.name,
+    eventId: req.body?.eventId,
+    category: String(req.body?.category || ''),
+    gold: req.body?.gold,
+    mat: req.body?.mat,
+    note: req.body?.note
+  })
+}))
+
+// 补证（成员+，仅本人申报单）：待补证状态补充材料后自动回到待审核队列
+app.post('/api/claims/evidence', ...mutate('claimEvidence', 'claims/evidence', (req) => {
+  return addEvidence({
+    farmId: req.ctx.farmId,
+    userId: req.ctx.user.id,
+    userName: req.ctx.user.name,
+    id: req.body?.id,
+    text: req.body?.text
+  })
+}))
+
+// 复核（管理员+）：approve 批准并按核定金额联动赔付金币与防灾物资；reject 驳回；moreinfo 要求补证
+app.post('/api/claims/review', ...mutate('claimReview', 'claims/review', (req) => {
+  return reviewClaim({
+    farmId: req.ctx.farmId,
+    userId: req.ctx.user.id,
+    userName: req.ctx.user.name,
+    id: req.body?.id,
+    action: String(req.body?.action || ''),
+    note: req.body?.note,
+    gold: req.body?.gold,
+    mat: req.body?.mat
+  })
 }))
 
 // 买种子

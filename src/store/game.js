@@ -79,6 +79,9 @@ export const useGameStore = defineStore('game', {
     irrigationCosts: { reservoir: 60, canal: 8 },
     irrigationNetworks: [],
     irrigationReport: null,
+    claims: [],
+    claimEvents: [],
+    claimMeta: { cats: {}, status: {}, maxGold: 500, maxMat: 20 },
     irrBuildMode: null,
     selectedPlotId: null,
     seedMode: false,
@@ -104,7 +107,8 @@ export const useGameStore = defineStore('game', {
       // 成员可用权限白名单（与服务端 ROLE_PERMS.member 对齐）
       return ['plant', 'water', 'fertilize', 'clean', 'harvest', 'protect', 'buymat', 'buyseed',
         'sellcrop', 'adopt', 'feed', 'collect', 'enqueue', 'cancelJob', 'collectJob', 'reorderJob',
-        'irrigToggle', 'irrigPriority', 'irrigTarget', 'careTrial', 'cancelTrial'].includes(perm)
+        'irrigToggle', 'irrigPriority', 'irrigTarget', 'careTrial', 'cancelTrial',
+        'claimSubmit', 'claimEvidence'].includes(perm)
     },
     // 管理员+
     canManage: (s) => s.role === 'admin' || s.role === 'owner',
@@ -295,6 +299,9 @@ export const useGameStore = defineStore('game', {
       this.irrigationCosts = d.irrigationCosts || this.irrigationCosts
       this.irrigationNetworks = d.irrigationNetworks || []
       this.irrigationReport = d.irrigationReport || null
+      this.claims = d.claims || []
+      this.claimEvents = d.claimEvents || []
+      this.claimMeta = d.claimMeta || this.claimMeta
       this.loaded = true
       if (!opts.silent && this.canManage) this.loadCoopDetail()
     },
@@ -542,6 +549,39 @@ export const useGameStore = defineStore('game', {
       }, { denyPerm: 'cancelTrial' })
     },
 
+    // ===== 灾害损失申报与协作复核 =====
+    async submitClaim(payload) {
+      const r = await this._commit(async () => {
+        const d = await api('/claims/submit', 'POST', payload)
+        await this.load({ silent: true })
+        return d
+      }, { denyPerm: 'claimSubmit' })
+      if (r) this.showToast(`已提交申报（单号 #${r.id}），等待管理员复核`, 'success')
+      return r
+    },
+    async addClaimEvidence(id, text) {
+      const r = await this._commit(async () => {
+        const d = await api('/claims/evidence', 'POST', { id, text })
+        await this.load({ silent: true })
+        return d
+      }, { denyPerm: 'claimEvidence' })
+      if (r) this.showToast('补证已提交，申报单回到待审核队列', 'success')
+      return r
+    },
+    async reviewClaim(id, action, note, gold, mat) {
+      const r = await this._commit(async () => {
+        const d = await api('/claims/review', 'POST', { id, action, note, gold, mat })
+        await this.load({ silent: true })
+        return d
+      }, { denyPerm: 'claimReview' })
+      if (r) {
+        if (r.status === 'approved') this.showToast(`已批准赔付：🪙${r.payoutGold} + 物资×${r.payoutMat}`, 'success')
+        else if (r.status === 'rejected') this.showToast('已驳回该申报', 'info')
+        else this.showToast('已要求申报人补充材料', 'info')
+      }
+      return r
+    },
+
     selectPlot(id) {
       this.selectedPlotId = id
     },
@@ -558,6 +598,7 @@ const ACTION_LABELS = {
   'irrigation/build': '建造灌溉设施', 'irrigation/toggle': '灌溉设施启停', 'irrigation/demolish': '拆除灌溉设施',
   'irrigation/priority': '灌溉优先级', 'irrigation/target': '灌溉目标水分',
   'breeding/start': '杂交试验', 'breeding/care': '试验养护', 'breeding/cancel': '取消试验',
+  'claims/submit': '灾损申报', 'claims/evidence': '申报补证', 'claims/review': '申报复核',
   upgrade: '建筑升级'
 }
 

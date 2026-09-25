@@ -395,6 +395,34 @@ CREATE TABLE IF NOT EXISTS production_jobs (
   status TEXT NOT NULL DEFAULT 'running' -- running/done/canceled/collected
 );
 
+-- ===== 灾害损失申报与协作复核 =====
+-- 成员针对恶劣天气事件申报作物/动物/设施损失，管理员复核后联动赔付金币与防灾物资。
+-- 状态机：pending(待审核) → moreinfo(待补证，补证后回到 pending) → approved(已赔付)/rejected(已驳回)
+CREATE TABLE IF NOT EXISTS disaster_claims (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  farm_id INTEGER NOT NULL DEFAULT 1,
+  event_id INTEGER NOT NULL,           -- 关联的恶劣天气事件 weather_events.id
+  category TEXT NOT NULL,              -- crop/animal/facility
+  amount_gold INTEGER NOT NULL DEFAULT 0,  -- 申请（批准后为实付）赔付金币
+  amount_mat INTEGER NOT NULL DEFAULT 0,   -- 申请（批准后为实付）赔付防灾物资
+  note TEXT NOT NULL DEFAULT '',       -- 损失说明
+  evidence TEXT NOT NULL DEFAULT '[]', -- 补证记录 JSON [{by,byName,text,at}]
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending/moreinfo/approved/rejected
+  created_by INTEGER NOT NULL,         -- 申报人 users.id
+  created_name TEXT NOT NULL,          -- 申报人昵称快照
+  created_at INTEGER NOT NULL,
+  reviewed_by INTEGER,                 -- 复核人（管理员/场主）
+  reviewed_name TEXT,
+  reviewed_at INTEGER,
+  review_note TEXT                     -- 复核意见（驳回原因 / 需补充的材料）
+);
+
+-- 重复申报约束：同一成员对同一灾害事件的同类损失，最多存在一条「未结案或已赔付」的申报；
+-- 被驳回(rejected)后允许重新申报。部分唯一索引在数据库层兜底，并发提交也不会重复立案
+CREATE UNIQUE INDEX IF NOT EXISTS idx_claims_active
+  ON disaster_claims(farm_id, event_id, category, created_by)
+  WHERE status IN ('pending','moreinfo','approved');
+
 -- ===== 杂交育种 =====
 -- 杂交新品种（遗传性状作物）：id 全局从 1000 起，跨农场唯一；库存物品 seed-v<id>/crop-v<id> 按农场隔离
 CREATE TABLE IF NOT EXISTS crop_varieties (
@@ -454,6 +482,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_farm ON production_jobs(farm_id);
 CREATE INDEX IF NOT EXISTS idx_trials_farm ON breeding_trials(farm_id);
 CREATE INDEX IF NOT EXISTS idx_members_user ON farm_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_invites_farm ON farm_invites(farm_id);
+CREATE INDEX IF NOT EXISTS idx_claims_farm ON disaster_claims(farm_id);
 `)
 
 // 杂交品种 id 从 1000 起，避免与基础作物 crops.id（1..n）冲突；
@@ -461,8 +490,8 @@ CREATE INDEX IF NOT EXISTS idx_invites_farm ON farm_invites(farm_id);
 db.exec("INSERT OR IGNORE INTO sqlite_sequence(name,seq) VALUES('crop_varieties',999)")
 
 // ===== 权限矩阵：共营农场的角色权限隔离 =====
-// member（成员）：日常种植/养护/交易/生产/育种养护
-// admin（管理员）：推进时间与灾害结算、防灾设施建造拆除、发起杂交试验、邀请管理
+// member（成员）：日常种植/养护/交易/生产/育种养护、灾害损失申报与补证
+// admin（管理员）：推进时间与灾害结算、防灾设施建造拆除、发起杂交试验、邀请管理、灾损复核赔付
 // owner（场主）：成员角色调整、转让、解散、建筑升级（并继承以上全部）
 export const ROLE_PERMS = {
   member: new Set([
@@ -471,11 +500,13 @@ export const ROLE_PERMS = {
     'adopt', 'feed', 'collect',
     'enqueue', 'cancelJob', 'collectJob', 'reorderJob',
     'irrigToggle', 'irrigPriority', 'irrigTarget',
-    'careTrial', 'cancelTrial'
+    'careTrial', 'cancelTrial',
+    'claimSubmit', 'claimEvidence'
   ]),
   admin: new Set([
     'nextday', 'irrigBuild', 'irrigDemolish', 'breedStart',
-    'inviteCreate', 'inviteList', 'inviteRevoke'
+    'inviteCreate', 'inviteList', 'inviteRevoke',
+    'claimReview'
   ]),
   owner: new Set(['upgrade', 'memberRole', 'transfer', 'disband'])
 }
